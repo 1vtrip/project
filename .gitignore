@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Секреты (токен бота, URL базы)
+.env
+
+# IDE и macOS
+.idea/
+.DS_Store
