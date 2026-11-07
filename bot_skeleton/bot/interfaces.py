@@ -4,6 +4,7 @@
 C++-ядро и PostgreSQL, бот работает на заглушках из fakes.py.
 Потом заглушки заменяются реальными классами, а код бота не меняется.
 """
+from datetime import date
 from typing import Protocol
 
 
@@ -30,13 +31,23 @@ class ChatRepository(Protocol):
 
 
 class ScheduleProvider(Protocol):
-    """Расписание на сегодня (Студент 3 вызывает C++ через subprocess и оформляет текст)."""
+    """Расписание (Студент 3 вызывает C++ через subprocess и оформляет текст).
 
-    async def today_message(self, group: str) -> str | None:
-        """Готовый HTML-текст для Telegram или None, если сегодня пар нет.
+    Оба метода возвращают готовый HTML-текст для Telegram или None, если пар нет.
+    Учебную неделю (1-4) для переданной даты провайдер считает сам.
 
-        Raises:
-            GroupNotFound: группы не существует.
-            ScheduleUnavailable: расписание сейчас не получить.
+    Raises:
+        GroupNotFound: группы не существует.
+        ScheduleUnavailable: расписание сейчас не получить.
+    """
+
+    async def day_message(self, group: str, day: date) -> str | None:
+        """Пары группы на конкретную дату."""
+        ...
+
+    async def week_message(self, group: str, start: date) -> str | None:
+        """Пары на 7 дней начиная с start (включительно), воскресенья пропускаются.
+
+        Отрезок может захватывать две учебные недели, номер считается для каждого дня.
         """
         ...

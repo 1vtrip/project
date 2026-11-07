@@ -24,7 +24,7 @@ async def main() -> None:
     schedule = BsuirApiScheduleProvider(config.tz)  # временно: Python напрямую к API
 
     # Всё, что передано в Dispatcher, aiogram подставит в хендлеры по имени аргумента
-    dp = Dispatcher(repo=repo, schedule=schedule)
+    dp = Dispatcher(repo=repo, schedule=schedule, config=config)
     dp.include_router(router)
 
     await bot.set_my_commands([

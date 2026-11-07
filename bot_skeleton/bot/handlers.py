@@ -1,7 +1,9 @@
 import re
+from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import (
     JOIN_TRANSITION,
     LEAVE_TRANSITION,
@@ -10,9 +12,11 @@ from aiogram.filters import (
     CommandObject,
     CommandStart,
 )
-from aiogram.types import ChatMemberUpdated, Message
+from aiogram.types import CallbackQuery, ChatMemberUpdated, Message
 
+from bot.config import Config
 from bot.interfaces import ChatRepository, GroupNotFound, ScheduleProvider, ScheduleUnavailable
+from bot.views import ScheduleCb, View, render, schedule_keyboard
 
 router = Router()
 
@@ -54,6 +58,7 @@ async def cmd_setgroup(
     bot: Bot,
     repo: ChatRepository,
     schedule: ScheduleProvider,
+    config: Config,
 ) -> None:
     group = (command.args or "").strip()
     if not GROUP_RE.fullmatch(group):
@@ -64,7 +69,8 @@ async def cmd_setgroup(
         return
 
     try:
-        await schedule.today_message(group)  # заодно проверяем, что группа существует
+        # заодно проверяем, что группа существует
+        await schedule.day_message(group, datetime.now(config.tz).date())
     except GroupNotFound:
         await message.answer(f"Группа <b>{group}</b> не найдена в расписании БГУИР.")
         return
@@ -79,20 +85,43 @@ async def cmd_setgroup(
 
 
 @router.message(Command("today"))
-async def cmd_today(message: Message, repo: ChatRepository, schedule: ScheduleProvider) -> None:
+async def cmd_today(
+    message: Message, repo: ChatRepository, schedule: ScheduleProvider, config: Config
+) -> None:
     group = await repo.get_group(message.chat.id)
     if group is None:
         await message.answer("Сначала укажи группу: <code>/setgroup 521704</code>")
         return
+    text = await render(View.TODAY, group, schedule, config.tz)
+    await message.answer(text, reply_markup=schedule_keyboard(View.TODAY))
+
+
+@router.callback_query(ScheduleCb.filter())
+async def on_schedule_button(
+    callback: CallbackQuery,
+    callback_data: ScheduleCb,
+    repo: ChatRepository,
+    schedule: ScheduleProvider,
+    config: Config,
+) -> None:
+    """Кнопки Сегодня/Завтра/Неделя: меняем текст того же сообщения, а не шлём новое."""
+    message = callback.message
+    if not isinstance(message, Message):  # сообщение слишком старое, Telegram его не отдаёт
+        await callback.answer("Сообщение устарело, отправь /today", show_alert=True)
+        return
+    group = await repo.get_group(message.chat.id)
+    if group is None:
+        await callback.answer("Беседа не привязана к группе: /setgroup", show_alert=True)
+        return
+    # Отвечаем сразу, чтобы у нажавшего не крутились часики, пока ждём API
+    await callback.answer()
+
+    text = await render(callback_data.view, group, schedule, config.tz)
     try:
-        text = await schedule.today_message(group)
-    except GroupNotFound:
-        await message.answer("Группа больше не найдена в расписании. Проверь номер через /setgroup.")
-        return
-    except ScheduleUnavailable:
-        await message.answer("Сайт БГУИР сейчас не отвечает, попробуй чуть позже 🙏")
-        return
-    await message.answer(text or "Сегодня пар нет 🎉")
+        await message.edit_text(text, reply_markup=schedule_keyboard(callback_data.view))
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):  # нажали ту же вкладку ещё раз
+            raise
 
 
 @router.message(Command("stop"))

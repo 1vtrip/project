@@ -5,7 +5,7 @@
 их реализация ScheduleProvider, а код бота не изменится.
 """
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -22,43 +22,45 @@ def _parse_date(s: str | None) -> date | None:
     return datetime.strptime(s, "%d.%m.%Y").date() if s else None
 
 
-def _is_today(lesson: dict, today: date, week: int) -> bool:
-    # Разовое занятие на конкретную дату
-    if lesson.get("dateLesson"):
-        return _parse_date(lesson["dateLesson"]) == today
-    if week not in (lesson.get("weekNumber") or []):
-        return False
-    start = _parse_date(lesson.get("startLessonDate"))
-    end = _parse_date(lesson.get("endLessonDate"))
-    return (start is None or start <= today) and (end is None or today <= end)
+def _week_for(day: date, today: date, current_week: int) -> int:
+    """Учебная неделя (1-4) для любой даты: недели идут по кругу с понедельника."""
+    shift = ((day - timedelta(days=day.weekday())) - (today - timedelta(days=today.weekday()))).days // 7
+    return (current_week - 1 + shift) % 4 + 1
 
 
-def _format(group: str, today: date, week: int, lessons: list[dict]) -> str:
-    lines = [
-        f"📅 <b>Расписание группы {escape(group)}</b>",
-        f"{WEEKDAYS[today.weekday()]}, {today:%d.%m} · {week}-я неделя",
-        "",
-    ]
-    for ls in lessons:
-        abbr = ls.get("lessonTypeAbbrev") or ""
-        line = (
-            f"{TYPE_EMOJI.get(abbr, '🔹')} {ls['startLessonTime']}–{ls['endLessonTime']} · "
-            f"<b>{escape(ls.get('subject') or '')}</b>"
-        )
-        if abbr:
-            line += f" ({escape(abbr)})"
-        if ls.get("auditories"):
-            line += " · " + escape(", ".join(ls["auditories"]))
-        if ls.get("numSubgroup"):
-            line += f" · подгр. {ls['numSubgroup']}"
-        teachers = [f"{e['lastName']} {e['firstName'][:1]}.{e['middleName'][:1]}."
-                    for e in ls.get("employees") or [] if e.get("lastName")]
-        if teachers:
-            line += "\n      👤 " + escape(", ".join(teachers))
-        if ls.get("note"):
-            line += "\n      📝 " + escape(ls["note"])
-        lines.append(line)
-    return "\n".join(lines)
+def _lessons_on(data: dict, day: date, week: int) -> list[dict]:
+    def matches(ls: dict) -> bool:
+        if ls.get("dateLesson"):  # разовое занятие на конкретную дату
+            return _parse_date(ls["dateLesson"]) == day
+        if week not in (ls.get("weekNumber") or []):
+            return False
+        start = _parse_date(ls.get("startLessonDate"))
+        end = _parse_date(ls.get("endLessonDate"))
+        return (start is None or start <= day) and (end is None or day <= end)
+
+    day_lessons = (data.get("schedules") or {}).get(WEEKDAYS[day.weekday()], [])
+    return sorted(filter(matches, day_lessons), key=lambda ls: ls["startLessonTime"])
+
+
+def _format_lesson(ls: dict) -> str:
+    abbr = ls.get("lessonTypeAbbrev") or ""
+    line = (
+        f"{TYPE_EMOJI.get(abbr, '🔹')} {ls['startLessonTime']}–{ls['endLessonTime']} · "
+        f"<b>{escape(ls.get('subject') or '')}</b>"
+    )
+    if abbr:
+        line += f" ({escape(abbr)})"
+    if ls.get("auditories"):
+        line += " · " + escape(", ".join(ls["auditories"]))
+    if ls.get("numSubgroup"):
+        line += f" · подгр. {ls['numSubgroup']}"
+    teachers = [f"{e['lastName']} {e['firstName'][:1]}.{e['middleName'][:1]}."
+                for e in ls.get("employees") or [] if e.get("lastName")]
+    if teachers:
+        line += "\n      👤 " + escape(", ".join(teachers))
+    if ls.get("note"):
+        line += "\n      📝 " + escape(ls["note"])
+    return line
 
 
 class BsuirApiScheduleProvider:
@@ -73,7 +75,8 @@ class BsuirApiScheduleProvider:
             resp.raise_for_status()
             return await resp.json()
 
-    async def today_message(self, group: str) -> str | None:
+    async def _fetch(self, group: str) -> tuple[dict, int]:
+        """Расписание группы и номер текущей учебной недели."""
         try:
             async with aiohttp.ClientSession(timeout=self._timeout) as session:
                 week = await self._get_json(session, f"{API}/current-week")
@@ -82,13 +85,38 @@ class BsuirApiScheduleProvider:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
             raise ScheduleUnavailable(repr(e)) from e
+        return data, int(week)
 
-        today = datetime.now(self._tz).date()
-        day_lessons = (data.get("schedules") or {}).get(WEEKDAYS[today.weekday()], [])
-        lessons = sorted(
-            (ls for ls in day_lessons if _is_today(ls, today, int(week))),
-            key=lambda ls: ls["startLessonTime"],
-        )
+    async def day_message(self, group: str, day: date) -> str | None:
+        data, current_week = await self._fetch(group)
+        week = _week_for(day, datetime.now(self._tz).date(), current_week)
+        lessons = _lessons_on(data, day, week)
         if not lessons:
             return None
-        return _format(group, today, int(week), lessons)
+        return "\n".join([
+            f"📅 <b>Расписание группы {escape(group)}</b>",
+            f"{WEEKDAYS[day.weekday()]}, {day:%d.%m} · {week}-я неделя",
+            "",
+            *map(_format_lesson, lessons),
+        ])
+
+    async def week_message(self, group: str, start: date) -> str | None:
+        data, current_week = await self._fetch(group)
+        today = datetime.now(self._tz).date()
+        blocks = []
+        for i in range(7):
+            day = start + timedelta(days=i)
+            if day.weekday() == 6:  # воскресенье
+                continue
+            week = _week_for(day, today, current_week)
+            lessons = _lessons_on(data, day, week)
+            if lessons:
+                blocks.append(
+                    f"<b>{WEEKDAYS[day.weekday()]}, {day:%d.%m}</b> · {week}-я неделя\n"
+                    + "\n".join(map(_format_lesson, lessons))
+                )
+        if not blocks:
+            return None
+        end = start + timedelta(days=6)
+        header = f"🗓 <b>Группа {escape(group)} · 7 дней</b>\n{start:%d.%m}–{end:%d.%m}"
+        return "\n\n".join([header, *blocks])

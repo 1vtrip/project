@@ -1,4 +1,6 @@
 """Заглушки для разработки бота без БД и C++-модуля."""
+from datetime import date
+
 from bot.interfaces import GroupNotFound
 
 
@@ -25,11 +27,14 @@ class InMemoryChatRepository:
 class FakeScheduleProvider:
     """Любая 6-значная группа существует, кроме 000000."""
 
-    async def today_message(self, group: str) -> str | None:
+    async def day_message(self, group: str, day: date) -> str | None:
         if group == "000000":
             raise GroupNotFound(group)
         return (
-            f"📅 <b>Расписание группы {group} на сегодня</b>\n\n"
+            f"📅 <b>Расписание группы {group} на {day:%d.%m}</b>\n\n"
             "🕘 09:00–10:20 · <b>ООП</b> (ЛК) · 506-5\n"
             "🕥 10:35–11:55 · <b>Матанализ</b> (ПЗ) · 312-1"
         )
+
+    async def week_message(self, group: str, start: date) -> str | None:
+        return await self.day_message(group, start)
