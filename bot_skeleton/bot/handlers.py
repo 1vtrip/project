@@ -25,7 +25,7 @@ GROUP_CHATS = (ChatType.GROUP, ChatType.SUPERGROUP)
 
 HELP_TEXT = (
     "👋 Я присылаю расписание БГУИР в беседу каждое утро.\n\n"
-    "/setgroup <code>521704</code> — привязать беседу к группе (админы)\n"
+    "/setgroup <code>123456</code> — привязать беседу к группе (админы)\n"
     "/today — расписание на сегодня\n"
     "/stop — отключить рассылку (админы)\n"
     "/help — эта справка"
@@ -62,7 +62,7 @@ async def cmd_setgroup(
 ) -> None:
     group = (command.args or "").strip()
     if not GROUP_RE.fullmatch(group):
-        await message.answer("Укажи номер группы из 6 цифр: <code>/setgroup 521704</code>")
+        await message.answer("Укажи номер группы из 6 цифр: <code>/setgroup 123456</code>")
         return
     if not await is_admin(message, bot):
         await message.answer("Менять группу могут только администраторы беседы.")
@@ -90,7 +90,7 @@ async def cmd_today(
 ) -> None:
     group = await repo.get_group(message.chat.id)
     if group is None:
-        await message.answer("Сначала укажи группу: <code>/setgroup 521704</code>")
+        await message.answer("Сначала укажи группу: <code>/setgroup 123456</code>")
         return
     text = await render(View.TODAY, group, schedule, config.tz)
     await message.answer(text, reply_markup=schedule_keyboard(View.TODAY))
